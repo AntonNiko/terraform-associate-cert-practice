@@ -1,8 +1,26 @@
 # Copyright (c) HashiCorp, Inc.
 # SPDX-License-Identifier: MPL-2.0
 
+data "terraform_remote_state" "vpc" {
+  backend = "local"
+
+  config = {
+    path = "../learn-tf-data-sources-vpc/terraform.tfstate"
+  }
+}
+
 provider "aws" {
-  region = "us-east-1"
+  region = data.terraform_remote_state.vpc.outputs.aws_region
+}
+
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
 }
 
 resource "random_string" "lb_id" {
@@ -19,8 +37,8 @@ module "elb_http" {
 
   internal = false
 
-  security_groups = []
-  subnets         = []
+  security_groups = data.terraform_remote_state.vpc.outputs.lb_security_group_ids
+  subnets         = data.terraform_remote_state.vpc.outputs.public_subnet_ids
 
   number_of_instances = length(aws_instance.app)
   instances           = aws_instance.app.*.id
@@ -42,12 +60,14 @@ module "elb_http" {
 }
 
 resource "aws_instance" "app" {
-  ami = "ami-04d29b6f966df1537"
+  ami = data.aws_ami.amazon_linux.id
+
+  count = var.instances_per_subnet * length(data.terraform_remote_state.vpc.outputs.private_subnet_ids)
 
   instance_type = var.instance_type
 
-  subnet_id              = ""
-  vpc_security_group_ids = []
+  subnet_id              = data.terraform_remote_state.vpc.outputs.private_subnet_ids[count.index % length(data.terraform_remote_state.vpc.outputs.private_subnet_ids)]
+  vpc_security_group_ids = data.terraform_remote_state.vpc.outputs.app_security_group_ids
 
   user_data = <<-EOF
     #!/bin/bash
